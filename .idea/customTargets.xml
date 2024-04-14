@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="CLionExternalBuildManager">
+    <target id="fa4b3fcb-76f1-47cb-8ce3-a58fb2903124" name="Cargo Debug" defaultType="TOOL">
+      <configuration id="0ec53c7f-af2e-48f1-8b4d-e728e5bb086c" name="Cargo Debug" toolchainName="rust-arm-gdb">
+        <build type="TOOL">
+          <tool actionId="Tool_External Tools_Build Debug" />
+        </build>
+        <clean type="TOOL">
+          <tool actionId="Tool_External Tools_Clean" />
+        </clean>
+      </configuration>
+    </target>
+  </component>
+</project>

@@ -223,12 +223,15 @@ where
 
         let join_success = match resp {
             Ok(resp) => {
-                if resp == JoinResponse::JoinSuccess {
-                    info!("LoRa join request successfully accepted.");
-                    true
-                } else {
-                    info!("LoRa join request not acknowledged.");
-                    false
+                match resp {
+                    JoinResponse::JoinSuccess => {
+                        info!("LoRa join request successfully accepted.");
+                        true
+                    }
+                    JoinResponse::NoJoinAccept => {
+                        info!("LoRa join request not acknowledged.");
+                        false
+                    }
                 }
             }
             Err(e) => {
