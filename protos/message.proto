@@ -1,0 +1,24 @@
+syntax = "proto2";
+
+message LoraMessage {
+  message StatusReport {
+    optional float battery_voltage = 3;
+    optional float temperature = 4;
+
+    optional uint32 time_to_first_fix = 5;
+    optional float hdop = 6;
+    optional uint32 num_of_fix_satellites = 7;
+
+    optional float latitude = 8;
+    optional float longitude = 9;
+    optional float altitude = 10;
+  }
+
+  optional uint32 sequence = 1;
+  optional uint32 sequence_of_last_confirmation = 2;
+
+  optional StatusReport current_report = 11;
+
+  repeated StatusReport unacknowledged_reports = 12;
+}
+
