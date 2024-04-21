@@ -6,6 +6,7 @@
 
 use core::fmt::Error;
 use core::{u16, usize};
+
 use const_hex::decode_to_array;
 use cyw43::Control;
 use cyw43_pio::PioSpi;
@@ -40,26 +41,25 @@ use static_cell::StaticCell;
 use {defmt_rtt as _, panic_probe as _};
 use {defmt_rtt as _, panic_probe as _};
 
-use crate::gps::{Gps};
+use crate::gps::Gps;
 use crate::message::message::lora_message::StatusReport;
 use crate::message::message::LoraMessage;
 
 mod gps;
 mod message;
 
-
 const NONE_STATUS_REPORT: StatusReport = StatusReport {
     battery_voltage: None,
     temperature: None,
-time_to_first_fix: None,
-hdop: None,
-num_of_fix_satellites: None,
-latitude: None,
-longitude: None,
-altitude: None,
-unknown_fields: UnknownFields::empty(),
+    time_to_first_fix: None,
+    hdop: None,
+    num_of_fix_satellites: None,
+    latitude: None,
+    longitude: None,
+    altitude: None,
+    unknown_fields: UnknownFields::empty(),
 };
-const NONE_OPTION_STATUS_REPORT: Option< StatusReport > = None;
+const NONE_OPTION_STATUS_REPORT: Option<StatusReport> = None;
 
 // warning: set these appropriately for the region
 const LORAWAN_REGION: region::Region = region::Region::EU868;
@@ -115,6 +115,14 @@ async fn main(spawner: Spawner) {
         unwrap!(spawner.spawn(blink_with_frequency(control)));
     };
 
+    //---------------------Initialize the ADC to read temperature and battery voltage-------------
+    let mut adc = Adc::new(p.ADC, Irqs, embassy_rp::adc::Config::default());
+    let mut bat_chan = Channel::new_pin(p.PIN_26, Pull::None);
+    let mut temp_chan = Channel::new_temp_sensor(p.ADC_TEMP_SENSOR);
+
+    //---------------------Initialize the GPS UART----------------------
+    let mut gps = Gps::new(p.UART0, Irqs, p.PIN_1, p.PIN_4);
+
     //----------------Initialize the LoRa Radio-----------------
     let mut device = {
         let nss = Output::new(p.PIN_3.degrade(), Level::High);
@@ -157,26 +165,20 @@ async fn main(spawner: Spawner) {
         device
     };
 
-    //---------------------Initialize the ADC to read temperature and battery voltage-------------
-    let mut adc = Adc::new(p.ADC, Irqs, embassy_rp::adc::Config::default());
-    let mut bat_chan = Channel::new_pin(p.PIN_26, Pull::None);
-    let mut temp_chan = Channel::new_temp_sensor(p.ADC_TEMP_SENSOR);
-
-    //---------------------Initialize the GPS UART----------------------
-    let mut gps = Gps::new(p.UART0, Irqs, p.PIN_1, p.PIN_4);
-
     //-------------------Main Loop---------------------
 
     // The initial data rate. Can be changed by sending an uplink with FPORT 1
-    device.set_datarate(DR::_4);
+    device.set_datarate(DR::_3);
     // How long to wait between messages. Can be set by sending an uplink with FPORT 2
     let mut interval_between_wakeups_ms: u32 = 60000;
     //How lonkg to wait for the GPS to aqcuire a position before giving up. Can be set by sending an uplink with FPORT 3
-    let mut gps_timeout_ms: u32 = 120000;
+    let mut gps_timeout_ms: u32 = 240000;
 
     let mut sequence_counter: u32 = 0;
     let mut sequence_of_last_confirmation: Option<u32> = None;
     let mut previous_positions: [Option<StatusReport>; 3] = [NONE_OPTION_STATUS_REPORT; 3];
+
+    let mut gps_did_ever_receive_valid_position = false;
 
     loop {
         //---------------------------------Acquire Sensor Data-------------------------------------
@@ -194,6 +196,7 @@ async fn main(spawner: Spawner) {
         let current_report: StatusReport = match gps_result {
             Ok(pos) => {
                 info!("Received GPS Position, packaging it…");
+                gps_did_ever_receive_valid_position = false;
                 StatusReport {
                     battery_voltage: Some(battery_voltage),
                     temperature: Some(temperature),
@@ -208,20 +211,22 @@ async fn main(spawner: Spawner) {
             }
             Err(_) => {
                 // In case of failure, send the GPS to sleep as well,
-                gps.enable_pin.set_low();
+                if gps_did_ever_receive_valid_position {
+                    gps.enable_pin.set_low();
+                }
                 info!("GPS Position timeout");
                 StatusReport {
                     battery_voltage: Some(battery_voltage),
                     temperature: Some(temperature),
                     time_to_first_fix: None,
-                    hdop:  None,
-                    num_of_fix_satellites:  None,
-                    latitude:  None,
-                    longitude:  None,
-                    altitude:  None,
+                    hdop: None,
+                    num_of_fix_satellites: None,
+                    latitude: None,
+                    longitude: None,
+                    altitude: None,
                     unknown_fields: UnknownFields::empty(),
                 }
-            },
+            }
         };
 
         //---------------------------Assemble the message----------------------------
@@ -240,15 +245,21 @@ async fn main(spawner: Spawner) {
                         } else {
                             Repeated::empty()
                         }
-                    },
-                    DR::_4 |  DR::_5 |  DR::_6 => {
+                    }
+                    DR::_4 | DR::_5 | DR::_6 => {
                         // Send all previous positions we have. That may be 1,2, or 3
-                        if previous_positions[0].is_some() && previous_positions[1].is_some() && previous_positions[2].is_some() {
+                        if previous_positions[0].is_some()
+                            && previous_positions[1].is_some()
+                            && previous_positions[2].is_some()
+                        {
                             for i in 0..3 {
                                 unack_report_buf[i] = copy_sr(&previous_positions[i]);
                             }
                             Repeated::from_slice(&unack_report_buf)
-                        } else if previous_positions[0].is_some() && previous_positions[1].is_some() && previous_positions[2].is_some() {
+                        } else if previous_positions[0].is_some()
+                            && previous_positions[1].is_some()
+                            && previous_positions[2].is_some()
+                        {
                             unack_report_buf[0] = copy_sr(&previous_positions[0]);
                             unack_report_buf[1] = copy_sr(&previous_positions[1]);
                             Repeated::from_slice(&unack_report_buf[0..2])
@@ -258,8 +269,8 @@ async fn main(spawner: Spawner) {
                         } else {
                             Repeated::empty()
                         }
-                    },
-                    _ => Repeated::empty()
+                    }
+                    _ => Repeated::empty(),
                 }
             },
             unknown_fields: UnknownFields::empty(),
@@ -310,9 +321,9 @@ async fn main(spawner: Spawner) {
                                 2 => {
                                     if data.data.len() == 4 {
                                         let new_delay_millis: u32 = ((data.data[0] as u32) << 24)
-                                            + ((data.data[0] as u32) << 16)
-                                            + ((data.data[0] as u32) << 8)
-                                            + ((data.data[0] as u32) << 0);
+                                            + ((data.data[1] as u32) << 16)
+                                            + ((data.data[2] as u32) << 8)
+                                            + ((data.data[3] as u32) << 0);
                                         info!(
                                             "Changing delay between messages to {}",
                                             new_delay_millis
@@ -325,9 +336,9 @@ async fn main(spawner: Spawner) {
                                 3 => {
                                     if data.data.len() == 4 {
                                         let new_gps_timeout: u32 = ((data.data[0] as u32) << 24)
-                                            + ((data.data[0] as u32) << 16)
-                                            + ((data.data[0] as u32) << 8)
-                                            + ((data.data[0] as u32) << 0);
+                                            + ((data.data[1] as u32) << 16)
+                                            + ((data.data[2] as u32) << 8)
+                                            + ((data.data[3] as u32) << 0);
                                         info!("Changing GPS Timeout to {}", new_gps_timeout);
                                         gps_timeout_ms = new_gps_timeout;
                                     } else {
@@ -532,20 +543,18 @@ fn dr_from_u8(value: u8) -> Result<DR, Error> {
 // Hacky copy() for status report
 fn copy_sr<'a>(sr: &Option<StatusReport>) -> StatusReport<'a> {
     match sr {
-        Some(sr) => {
-            StatusReport {
-                battery_voltage: None,
-                temperature: None,
-                time_to_first_fix: sr.time_to_first_fix.clone(),
-                hdop: sr.hdop.clone(),
-                num_of_fix_satellites: sr.num_of_fix_satellites.clone(),
-                latitude: sr.latitude.clone(),
-                longitude: sr.longitude.clone(),
-                altitude: sr.altitude.clone(),
-                unknown_fields: UnknownFields::empty(),
-                ..Default::default()
-            }
-        }
-        None => StatusReport::default()
+        Some(sr) => StatusReport {
+            battery_voltage: None,
+            temperature: None,
+            time_to_first_fix: sr.time_to_first_fix.clone(),
+            hdop: sr.hdop.clone(),
+            num_of_fix_satellites: sr.num_of_fix_satellites.clone(),
+            latitude: sr.latitude.clone(),
+            longitude: sr.longitude.clone(),
+            altitude: sr.altitude.clone(),
+            unknown_fields: UnknownFields::empty(),
+            ..Default::default()
+        },
+        None => StatusReport::default(),
     }
 }
