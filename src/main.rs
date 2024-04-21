@@ -68,9 +68,9 @@ const MAX_TX_POWER: u8 = 14;
 // warning: change these if using another device
 // These are in the order that can be pasted into chirpstack/ttn, the EUIs will be reversed (to LSB)
 // suiince this is what the rust code expects
-const DEV_EUI: &str = "5945b83dc486feb5";
-const APP_EUI: &str = "6b8dc8c69a4d619c";
-const APP_KEY: &str = "ce90f0e5300eb44cf5bb4b3106d68bf4";
+const DEV_EUI: &str = include_str!("../device-config/DEV_EUI");
+const APP_EUI: &str = include_str!("../device-config/APP_EUI");
+const APP_KEY: &str = include_str!("../device-config/APP_KEY");
 
 bind_interrupts!(struct Irqs {
     ADC_IRQ_FIFO => embassy_rp::adc::InterruptHandler;
