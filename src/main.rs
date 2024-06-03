@@ -232,7 +232,7 @@ async fn main(spawner: Spawner) {
                     pos.altitude,
                 ).unwrap();
                 lpp.add_analog_input(1, pos.hdop).unwrap();
-                lpp.add_analog_input(1, pos.time_to_fix_ms as f32).unwrap();
+                lpp.add_analog_input(2, pos.time_to_fix_ms as f32).unwrap();
             }
         }
 
