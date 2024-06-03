@@ -5,7 +5,8 @@ use embassy_rp::peripherals::{DMA_CH3, FLASH};
 // Taken from example
 const ADDR_OFFSET: u32 = 0x100000;
 const FLASH_SIZE: usize = 2 * 1024 * 1024;
-const BLOCK_COUNT: u32 = 100;
+//This way, we fill up the remaining megabyte of flash
+const BLOCK_COUNT: u32 = 256;
 
 const MAX_VALUE_PER_BLOCK: u32 = 100000;
 
