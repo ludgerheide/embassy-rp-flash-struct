@@ -31,15 +31,9 @@ static_cell = { version = "2.0.0" }
 portable-atomic = { version = "1.6.0", features = ["critical-section"] } # needed for static_cell on thumbv6
 const-hex = {version = "1.11.3", default-features = false}
 embedded-io-async = "0.6.1"
-micromath = { version = "2.1.0", features=["num-traits"] }
 nmea = { version = "0.6.0", default-features = false, features=["all-sentences"] }
+cayenne_lpp = "0.1.0"
 
-
-femtopb = "0.4.1"
-
-[build-dependencies]
-anyhow = "1.0.82"
-femtopb-build = "0.4.1"
 
 
 [profile.release]

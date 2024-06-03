@@ -7,6 +7,7 @@
 use core::{u16, usize};
 use core::fmt::Error;
 
+use cayenne_lpp::{CayenneLPP, LPP_ANALOG_INPUT_SIZE, LPP_GPS_SIZE, LPP_TEMPERATURE_SIZE};
 use const_hex::decode_to_array;
 use cyw43::Control;
 use cyw43_pio::PioSpi;
@@ -25,9 +26,6 @@ use embassy_sync::blocking_mutex::raw::ThreadModeRawMutex;
 use embassy_sync::signal::Signal;
 use embassy_time::{Delay, Duration, Timer, with_timeout};
 use embedded_hal_bus::spi::ExclusiveDevice;
-use femtopb::Message;
-use femtopb::Repeated;
-use femtopb::UnknownFields;
 use lora_phy::iv::GenericSx126xInterfaceVariant;
 use lora_phy::LoRa;
 use lora_phy::lorawan_radio::LorawanRadio;
@@ -45,26 +43,11 @@ use {defmt_rtt as _, panic_probe as _};
 use {defmt_rtt as _, panic_probe as _};
 
 use crate::flash::FlashCounter;
-use crate::gps::Gps;
-use crate::message::message::lora_message::StatusReport;
-use crate::message::message::LoraMessage;
+use crate::gps::{Gps, PositionData};
 
 mod gps;
 mod flash;
-mod message;
 
-const NONE_STATUS_REPORT: StatusReport = StatusReport {
-    battery_voltage: None,
-    temperature: None,
-    time_to_first_fix: None,
-    hdop: None,
-    num_of_fix_satellites: None,
-    latitude: None,
-    longitude: None,
-    altitude: None,
-    unknown_fields: UnknownFields::empty(),
-};
-const NONE_OPTION_STATUS_REPORT: Option<StatusReport> = None;
 
 // warning: set these appropriately for the region
 const LORAWAN_REGION: region::Region = region::Region::EU868;
@@ -123,6 +106,7 @@ async fn main(spawner: Spawner) {
             unwrap!(spawner.spawn(blink_with_frequency_for_gpio(led)));
         }
     };
+    STATUS_BLINK_MILLIS.signal(100);
 
     //---------------------Initialize the ADC to read temperature and battery voltage-------------
     let mut adc = Adc::new(p.ADC, Irqs, embassy_rp::adc::Config::default());
@@ -193,15 +177,11 @@ async fn main(spawner: Spawner) {
     //-------------------Main Loop---------------------
 
     // The initial data rate. Can be changed by sending an uplink with FPORT 1
-    device.set_datarate(DR::_3);
+    device.set_datarate(DR::_0);
     // How long to wait between messages. Can be set by sending an uplink with FPORT 2
     let mut interval_between_wakeups_ms: u32 = 60000;
     //How lonkg to wait for the GPS to aqcuire a position before giving up. Can be set by sending an uplink with FPORT 3
     let mut gps_timeout_ms: u32 = 240000;
-
-    let mut sequence_counter: u32 = flash_counter.read_counter();
-    let mut sequence_of_last_confirmation: Option<u32> = None;
-    let mut previous_positions: [Option<StatusReport>; 3] = [NONE_OPTION_STATUS_REPORT; 3];
 
     let mut gps_did_ever_receive_valid_position = false;
 
@@ -218,21 +198,11 @@ async fn main(spawner: Spawner) {
         )
         .await;
         let (battery_voltage, temperature) = analog_data_future.await;
-        let current_report: StatusReport = match gps_result {
+        let current_report: Option<PositionData> = match gps_result {
             Ok(pos) => {
                 info!("Received GPS Position, packaging it…");
                 gps_did_ever_receive_valid_position = false;
-                StatusReport {
-                    battery_voltage: Some(battery_voltage),
-                    temperature: Some(temperature),
-                    time_to_first_fix: Some(pos.time_to_fix_ms),
-                    hdop: Some(pos.hdop),
-                    num_of_fix_satellites: Some(pos.num_of_fix_satellites),
-                    latitude: Some(pos.latitude),
-                    longitude: Some(pos.longitude),
-                    altitude: Some(pos.altitude),
-                    unknown_fields: UnknownFields::empty(),
-                }
+                Some(pos)
             }
             Err(_) => {
                 // In case of failure, send the GPS to sleep as well,
@@ -240,96 +210,43 @@ async fn main(spawner: Spawner) {
                     gps.enable_pin.set_low();
                 }
                 info!("GPS Position timeout");
-                StatusReport {
-                    battery_voltage: Some(battery_voltage),
-                    temperature: Some(temperature),
-                    time_to_first_fix: None,
-                    hdop: None,
-                    num_of_fix_satellites: None,
-                    latitude: None,
-                    longitude: None,
-                    altitude: None,
-                    unknown_fields: UnknownFields::empty(),
-                }
+                None
             }
         };
 
         //---------------------------Assemble the message----------------------------
-        let mut unack_report_buf = [NONE_STATUS_REPORT; 3];
-        let message = LoraMessage {
-            sequence: Some(sequence_counter),
-            sequence_of_last_confirmation: sequence_of_last_confirmation,
-            current_report: Some(current_report),
-            unacknowledged_reports: {
-                match device.get_datarate() {
-                    DR::_0 | DR::_1 | DR::_2 => Repeated::empty(),
-                    DR::_3 => {
-                        if previous_positions[0].is_some() {
-                            unack_report_buf[0] = copy_sr(&previous_positions[0]);
-                            Repeated::from_slice(&unack_report_buf[0..1])
-                        } else {
-                            Repeated::empty()
-                        }
-                    }
-                    DR::_4 | DR::_5 | DR::_6 => {
-                        // Send all previous positions we have. That may be 1,2, or 3
-                        if previous_positions[0].is_some()
-                            && previous_positions[1].is_some()
-                            && previous_positions[2].is_some()
-                        {
-                            for i in 0..3 {
-                                unack_report_buf[i] = copy_sr(&previous_positions[i]);
-                            }
-                            Repeated::from_slice(&unack_report_buf)
-                        } else if previous_positions[0].is_some()
-                            && previous_positions[1].is_some()
-                            && previous_positions[2].is_some()
-                        {
-                            unack_report_buf[0] = copy_sr(&previous_positions[0]);
-                            unack_report_buf[1] = copy_sr(&previous_positions[1]);
-                            Repeated::from_slice(&unack_report_buf[0..2])
-                        } else if previous_positions[0].is_some() {
-                            unack_report_buf[0] = copy_sr(&previous_positions[0]);
-                            Repeated::from_slice(&unack_report_buf[0..2])
-                        } else {
-                            Repeated::empty()
-                        }
-                    }
-                    _ => Repeated::empty(),
-                }
-            },
-            unknown_fields: UnknownFields::empty(),
-        };
+        // create the buffer for a digital input and a temperature data type and initialize it
+        let mut buffer: [u8; LPP_ANALOG_INPUT_SIZE + LPP_TEMPERATURE_SIZE + LPP_GPS_SIZE + LPP_ANALOG_INPUT_SIZE + LPP_ANALOG_INPUT_SIZE] = [0; LPP_ANALOG_INPUT_SIZE + LPP_TEMPERATURE_SIZE + LPP_GPS_SIZE + LPP_ANALOG_INPUT_SIZE+ LPP_ANALOG_INPUT_SIZE];
+        let mut lpp = CayenneLPP::new(&mut buffer);
 
-        let mut msg_buf: [u8; 256] = [0; 256];
-        let encoded_len = message.encoded_len();
-        let (fport, to_send) = {
-            if encoded_len <= msg_buf.len() {
-                let encode_result = message.encode(&mut msg_buf.as_mut_slice());
-                match encode_result {
-                    Ok(_) => (1 as u8, &msg_buf[0..encoded_len]),
-                    Err(_) => (0 as u8, &msg_buf[0..0]),
-                }
-            } else {
-                warn!("Encoded Length of message exceeds buffer size!");
-                (0 as u8, &msg_buf[0..0])
+        // Add the values
+        lpp.add_analog_input(0, battery_voltage).unwrap();
+        lpp.add_temperature(0, temperature).unwrap();
+        match current_report {
+            None => (),
+            Some(pos) => {
+                lpp.add_gps(
+                    1,
+                    pos.latitude,
+                    pos.longitude,
+                    pos.altitude,
+                ).unwrap();
+                lpp.add_analog_input(1, pos.hdop).unwrap();
+                lpp.add_analog_input(1, pos.time_to_fix_ms as f32).unwrap();
             }
-        };
+        }
+
+        // retrieve the payload slice to be able to send the payload via an external API
+        let to_send = lpp.payload_slice();
 
         STATUS_BLINK_MILLIS.signal(50);
-        let resp = device.send(to_send, fport, true).await;
-        let mut should_add_position_to_previous = true;
+        let resp = device.send(to_send, 1, false).await;
         match resp {
             Ok(send_resp) => {
                 info!("Sending okay: {:?}", send_resp);
                 match send_resp {
                     SendResponse::DownlinkReceived(_) => {
-                        // Discard all previous:positions (we have successully transmitteed them now
-                        should_add_position_to_previous = false;
-                        previous_positions = [NONE_OPTION_STATUS_REPORT; 3];
-                        sequence_of_last_confirmation = Some(sequence_counter);
-
-                        // Then Handle downlink requests
+                        // Handle downlink requests
                         // We have received a donlink, but it does not necessarily contain information
                         let downlink = device.take_downlink();
                         match downlink {
@@ -387,19 +304,8 @@ async fn main(spawner: Spawner) {
             Err(e) => warn!("Unexpected error! {:?}", e),
         }
 
-        // If the unack_messages array is not empty at this point, we have not received a valid downlink.
-        // In this case, shift its contents up one and then put the current value in it, discarding
-        // Temperature and voltage
-        if should_add_position_to_previous {
-            if previous_positions[1].is_some() {
-                previous_positions[2] = Some(copy_sr(&previous_positions[1]));
-            }
-            if previous_positions[0].is_some() {
-                previous_positions[1] = Some(copy_sr(&previous_positions[0]));
-            }
-            previous_positions[0] = Some(copy_sr(&message.current_report));
-        }
-        sequence_counter += 1;
+        // Reset the message buffer
+        lpp.reset();
 
         STATUS_BLINK_MILLIS.signal(2000);
         Timer::after(Duration::from_millis(interval_between_wakeups_ms as u64)).await;
@@ -539,24 +445,5 @@ fn dr_from_u8(value: u8) -> Result<DR, Error> {
         5 => Ok(DR::_5),
         6 => Ok(DR::_6),
         _ => Err(Error),
-    }
-}
-
-// Hacky copy() for status report
-fn copy_sr<'a>(sr: &Option<StatusReport>) -> StatusReport<'a> {
-    match sr {
-        Some(sr) => StatusReport {
-            battery_voltage: None,
-            temperature: None,
-            time_to_first_fix: sr.time_to_first_fix.clone(),
-            hdop: sr.hdop.clone(),
-            num_of_fix_satellites: sr.num_of_fix_satellites.clone(),
-            latitude: sr.latitude.clone(),
-            longitude: sr.longitude.clone(),
-            altitude: sr.altitude.clone(),
-            unknown_fields: UnknownFields::empty(),
-            ..Default::default()
-        },
-        None => StatusReport::default(),
     }
 }
