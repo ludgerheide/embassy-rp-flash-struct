@@ -4,8 +4,8 @@
 #![no_std]
 #![no_main]
 
-use core::fmt::Error;
 use core::{u16, usize};
+use core::fmt::Error;
 
 use const_hex::decode_to_array;
 use cyw43::Control;
@@ -14,38 +14,43 @@ use defmt::*;
 use embassy_executor::Spawner;
 use embassy_rp::adc::{Adc, Async, Channel};
 use embassy_rp::bind_interrupts;
-use embassy_rp::gpio::{Input, Level, Output, Pin, Pull};
-use embassy_rp::peripherals::PIO0;
+use embassy_rp::gpio::{AnyPin, Input, Level, Output, Pin, Pull};
+use embassy_rp::gpio::Level::{High, Low};
 use embassy_rp::peripherals::{DMA_CH2, PIN_23, PIN_25, UART0};
+use embassy_rp::peripherals::PIO0;
 use embassy_rp::pio::Pio;
 use embassy_rp::spi::Spi;
 use embassy_rp::uart::BufferedInterruptHandler;
 use embassy_sync::blocking_mutex::raw::ThreadModeRawMutex;
 use embassy_sync::signal::Signal;
-use embassy_time::{with_timeout, Delay, Duration, Timer};
+use embassy_time::{Delay, Duration, Timer, with_timeout};
 use embedded_hal_bus::spi::ExclusiveDevice;
-use femtopb::{Message, Repeated, UnknownFields};
+use femtopb::Message;
+use femtopb::Repeated;
+use femtopb::UnknownFields;
 use lora_phy::iv::GenericSx126xInterfaceVariant;
-use lora_phy::lorawan_radio::LorawanRadio;
-use lora_phy::sx126x::{self, Sx126x, Sx126xVariant, TcxoCtrlVoltage};
 use lora_phy::LoRa;
+use lora_phy::lorawan_radio::LorawanRadio;
+use lora_phy::sx126x::{self, Sx1262, Sx126x, TcxoCtrlVoltage};
+use lorawan::keys::{AppSKey, NewSKey};
+use lorawan::parser::DevAddr;
+use lorawan_device::{JoinMode, RngCore};
+use lorawan_device::async_device::{Device, EmbassyTimer, region};
 use lorawan_device::async_device::SendResponse;
-use lorawan_device::async_device::{
-    radio, region, Device, EmbassyTimer, JoinMode, JoinResponse, Timings,
-};
 use lorawan_device::default_crypto::DefaultFactory as Crypto;
 use lorawan_device::region::DR;
-use lorawan_device::{AppEui, AppKey, CryptoFactory, DevEui, RngCore};
 use static_cell::StaticCell;
 
 use {defmt_rtt as _, panic_probe as _};
 use {defmt_rtt as _, panic_probe as _};
 
+use crate::flash::FlashCounter;
 use crate::gps::Gps;
 use crate::message::message::lora_message::StatusReport;
 use crate::message::message::LoraMessage;
 
 mod gps;
+mod flash;
 mod message;
 
 const NONE_STATUS_REPORT: StatusReport = StatusReport {
@@ -68,9 +73,9 @@ const MAX_TX_POWER: u8 = 14;
 // warning: change these if using another device
 // These are in the order that can be pasted into chirpstack/ttn, the EUIs will be reversed (to LSB)
 // suiince this is what the rust code expects
-const DEV_EUI: &str = include_str!("../device-config/DEV_EUI");
-const APP_EUI: &str = include_str!("../device-config/APP_EUI");
-const APP_KEY: &str = include_str!("../device-config/APP_KEY");
+const NEW_S_KEY: &str = include_str!("../device-config/NEW_S_KEY");
+const APP_S_KEY: &str = include_str!("../device-config/APP_S_KEY");
+const DEV_ADDR: &str = include_str!("../device-config/DEV_ADDR");
 
 bind_interrupts!(struct Irqs {
     ADC_IRQ_FIFO => embassy_rp::adc::InterruptHandler;
@@ -83,36 +88,40 @@ static STATUS_BLINK_MILLIS: Signal<ThreadModeRawMutex, u16> = Signal::new();
 async fn main(spawner: Spawner) {
     let p = embassy_rp::init(Default::default());
 
-    //----------------Initialize the WiFi hardware-------------
-    // Only done in order to get a blinking LED; slighlty overkill…
+    //----------------Initialize the Status blinky --------------------
     {
-        let fw = include_bytes!("../cyw43-firmware/43439A0.bin");
-        let clm = include_bytes!("../cyw43-firmware/43439A0_clm.bin");
+        if cfg!(feature = "blink_for_pico_w") {
+            let fw = include_bytes!("../cyw43-firmware/43439A0.bin");
+            let clm = include_bytes!("../cyw43-firmware/43439A0_clm.bin");
 
-        let pwr = Output::new(p.PIN_23, Level::Low);
-        let cs = Output::new(p.PIN_25, Level::High);
-        let mut pio = Pio::new(p.PIO0, Irqs);
-        let spi = PioSpi::new(
-            &mut pio.common,
-            pio.sm0,
-            pio.irq0,
-            cs,
-            p.PIN_24,
-            p.PIN_29,
-            p.DMA_CH2,
-        );
+            let pwr = Output::new(p.PIN_23, Level::Low);
+            let cs = Output::new(p.PIN_25, Level::High);
+            let mut pio = Pio::new(p.PIO0, Irqs);
+            let spi = PioSpi::new(
+                &mut pio.common,
+                pio.sm0,
+                pio.irq0,
+                cs,
+                p.PIN_24,
+                p.PIN_29,
+                p.DMA_CH2,
+            );
 
-        static STATE: StaticCell<cyw43::State> = StaticCell::new();
-        let state = STATE.init(cyw43::State::new());
-        let (_net_device, mut control, runner) = cyw43::new(state, pwr, spi, fw).await;
-        unwrap!(spawner.spawn(wifi_task(runner)));
+            static STATE: StaticCell<cyw43::State> = StaticCell::new();
+            let state = STATE.init(cyw43::State::new());
+            let (_net_device, mut control, runner) = cyw43::new(state, pwr, spi, fw).await;
+            unwrap!(spawner.spawn(wifi_task(runner)));
 
-        control.init(clm).await;
-        control
-            .set_power_management(cyw43::PowerManagementMode::SuperSave)
-            .await;
+            control.init(clm).await;
+            control
+                .set_power_management(cyw43::PowerManagementMode::SuperSave)
+                .await;
 
-        unwrap!(spawner.spawn(blink_with_frequency(control)));
+            unwrap!(spawner.spawn(blink_with_frequency_for_wifi(control)));
+        } else {
+            let led = Output::new(p.PIN_25.degrade(), Level::Low);
+            unwrap!(spawner.spawn(blink_with_frequency_for_gpio(led)));
+        }
     };
 
     //---------------------Initialize the ADC to read temperature and battery voltage-------------
@@ -122,6 +131,9 @@ async fn main(spawner: Spawner) {
 
     //---------------------Initialize the GPS UART----------------------
     let mut gps = Gps::new(p.UART0, Irqs, p.PIN_1, p.PIN_4);
+
+    //---------------------Initialize the Flash Counter-------------------------------
+    let mut flash_counter = FlashCounter::new(p.FLASH, p.DMA_CH3);
 
     //----------------Initialize the LoRa Radio-----------------
     let mut device = {
@@ -141,10 +153,9 @@ async fn main(spawner: Spawner) {
         );
         let spi = ExclusiveDevice::new(spi, nss, Delay);
         let config = sx126x::Config {
-            chip: Sx126xVariant::Sx1262,
+            chip: Sx1262,
             tcxo_ctrl: Some(TcxoCtrlVoltage::Ctrl1V7),
             use_dcdc: true,
-            use_dio2_as_rfswitch: true,
             rx_boost: false,
         };
         let iv = GenericSx126xInterfaceVariant::new(reset, dio1, busy, None, None).unwrap();
@@ -154,14 +165,28 @@ async fn main(spawner: Spawner) {
 
         let radio: LorawanRadio<_, _, MAX_TX_POWER> = lora.into();
         let region: region::Configuration = region::Configuration::new(LORAWAN_REGION);
+
+        // These three values are taken from files at build time and device-specific
+        let new_s_key = decode_to_array(NEW_S_KEY).unwrap();
+        let app_s_key = decode_to_array(APP_S_KEY).unwrap();
+        let mut dev_addr = decode_to_array(DEV_ADDR).unwrap();
+        dev_addr.reverse();
+
         let mut device: Device<_, Crypto, _, _> = Device::new(
             region,
             radio,
             EmbassyTimer::new(),
             embassy_rp::clocks::RoscRng,
         );
-        // This joins the device to the LoRa network. The first join may fail, then the method backs off and tries again
-        join_network(&mut device).await;
+        device
+            .join(&JoinMode::ABP {
+                newskey: NewSKey::from(new_s_key),
+                appskey: AppSKey::from(app_s_key),
+                devaddr: DevAddr::from(dev_addr),
+                fcntUp: flash_counter.read_counter(),
+            })
+            .await
+            .unwrap();
         device
     };
 
@@ -174,7 +199,7 @@ async fn main(spawner: Spawner) {
     //How lonkg to wait for the GPS to aqcuire a position before giving up. Can be set by sending an uplink with FPORT 3
     let mut gps_timeout_ms: u32 = 240000;
 
-    let mut sequence_counter: u32 = 0;
+    let mut sequence_counter: u32 = flash_counter.read_counter();
     let mut sequence_of_last_confirmation: Option<u32> = None;
     let mut previous_positions: [Option<StatusReport>; 3] = [NONE_OPTION_STATUS_REPORT; 3];
 
@@ -350,13 +375,14 @@ async fn main(spawner: Spawner) {
                         }
                     }
                     // If our session expired, we try to rejoin. We set the radio to the lowest data rate first.
-                    SendResponse::SessionExpired => {
-                        device.set_datarate(DR::_0);
-                        join_network(&mut device).await;
-                    }
                     SendResponse::NoAck => info!("No Acknowledgement received."),
                     SendResponse::RxComplete => info!("No data received."),
+                    SendResponse::SessionExpired => error!(
+                        "Session Expired. Because we are an ABP \
+                    device, this should never happen!"
+                    ),
                 }
+                flash_counter.increment_counter();
             }
             Err(e) => warn!("Unexpected error! {:?}", e),
         }
@@ -377,63 +403,12 @@ async fn main(spawner: Spawner) {
 
         STATUS_BLINK_MILLIS.signal(2000);
         Timer::after(Duration::from_millis(interval_between_wakeups_ms as u64)).await;
-    }
-}
 
-/// Attempt to join the LoRa network, with an exponential backoff in case of join failure
-async fn join_network<R, C, T, G>(device: &mut Device<R, C, T, G>)
-where
-    R: radio::PhyRxTx + Timings,
-    T: radio::Timer,
-    C: CryptoFactory + Default,
-    G: RngCore,
-{
-    let mut join_attempt_count = 0;
-    loop {
-        info!(
-            "Joining LoRaWAN network, attempt {:?}",
-            join_attempt_count + 1
-        );
-        // The DEV_EUI and APP_EUI need to be reversed before putting them unto the device, since the default byte order differs
-        // The key does not need that, for some reason.
-        let mut dev_eui = decode_to_array(DEV_EUI).unwrap();
-        dev_eui.reverse();
-        let mut app_eui = decode_to_array(APP_EUI).unwrap();
-        app_eui.reverse();
-        let resp = device
-            .join(&JoinMode::OTAA {
-                deveui: DevEui::from(dev_eui),
-                appeui: AppEui::from(app_eui),
-                appkey: AppKey::from(decode_to_array(APP_KEY).unwrap()),
-            })
-            .await;
-
-        let join_success = match resp {
-            Ok(resp) => match resp {
-                JoinResponse::JoinSuccess => {
-                    info!("LoRa join request successfully accepted.");
-                    true
-                }
-                JoinResponse::NoJoinAccept => {
-                    info!("LoRa join request not acknowledged.");
-                    false
-                }
-            },
-            Err(e) => {
-                warn!("LoRa join request failed with unknown error!: {:?}", e);
-                false
-            }
-        };
-
-        if join_success {
-            break;
-        }
-        //Exponential backoff, up to 2048 seconds
-        // Start at 1, then 2, then 4 …
-        Timer::after_secs(2_u64.pow(join_attempt_count)).await;
-        if join_attempt_count < 11 {
-            join_attempt_count += 1
-        }
+        // Add a nother random delay, based on the dev_addr and sequence counter, in order to avoid
+        // Devices stepping on each other
+        let random = embassy_rp::clocks::RoscRng.next_u32();
+        let delay = 2000.0 * (random as f32 / u32::MAX as f32);
+        Timer::after(Duration::from_millis(delay as u64)).await;
     }
 }
 
@@ -449,7 +424,7 @@ async fn wifi_task(
 }
 
 #[embassy_executor::task]
-async fn blink_with_frequency(mut control: Control<'static>) -> ! {
+async fn blink_with_frequency_for_wifi(mut control: Control<'static>) -> ! {
     // Initialize the blinking frequency to 500ms
     let mut blinking_delay: u16 = 100;
     let mut current_state = true;
@@ -459,6 +434,33 @@ async fn blink_with_frequency(mut control: Control<'static>) -> ! {
         // right away by taking the signal's value as new frequency
         control.gpio_set(0, current_state).await;
         current_state = !current_state;
+        let wait_result = with_timeout(
+            Duration::from_millis(blinking_delay as u64),
+            STATUS_BLINK_MILLIS.wait(),
+        )
+        .await;
+        match wait_result {
+            Ok(new_value) => blinking_delay = new_value,
+            Err(_) => (),
+        }
+    }
+}
+
+#[embassy_executor::task]
+async fn blink_with_frequency_for_gpio(mut led: Output<'static, AnyPin>) -> ! {
+    // Initialize the blinking frequency to 500ms
+    let mut blinking_delay: u16 = 100;
+    let mut current_state = Low;
+    loop {
+        // Toggle the LED, then wither wait for the current frequencies timeout
+        // (continuining blinking with the same frequency) or update the frequency
+        // right away by taking the signal's value as new frequency
+        led.set_level(current_state);
+        if current_state == Low {
+            current_state = High;
+        } else {
+            current_state = Low;
+        }
         let wait_result = with_timeout(
             Duration::from_millis(blinking_delay as u64),
             STATUS_BLINK_MILLIS.wait(),
