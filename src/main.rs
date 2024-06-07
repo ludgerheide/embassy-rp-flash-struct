@@ -7,7 +7,7 @@
 use core::{u16, usize};
 use core::fmt::Error;
 
-use cayenne_lpp::{CayenneLPP, LPP_ANALOG_INPUT_SIZE, LPP_GPS_SIZE, LPP_TEMPERATURE_SIZE};
+use cayenne_lpp::{CayenneLPP, LPP_ANALOG_INPUT_SIZE, LPP_DIGITAL_INPUT_SIZE, LPP_GPS_SIZE, LPP_TEMPERATURE_SIZE};
 use const_hex::decode_to_array;
 use cyw43::Control;
 use cyw43_pio::PioSpi;
@@ -179,7 +179,7 @@ async fn main(spawner: Spawner) {
     // The initial data rate. Can be changed by sending an uplink with FPORT 1
     device.set_datarate(DR::_0);
     // How long to wait between messages. Can be set by sending an uplink with FPORT 2
-    let mut interval_between_wakeups_ms: u32 = 60000;
+    let mut interval_between_wakeups_ms: u32 = 30000;
     //How lonkg to wait for the GPS to aqcuire a position before giving up. Can be set by sending an uplink with FPORT 3
     let mut gps_timeout_ms: u32 = 240000;
 
@@ -216,7 +216,7 @@ async fn main(spawner: Spawner) {
 
         //---------------------------Assemble the message----------------------------
         // create the buffer for a digital input and a temperature data type and initialize it
-        let mut buffer: [u8; LPP_ANALOG_INPUT_SIZE + LPP_TEMPERATURE_SIZE + LPP_GPS_SIZE + LPP_ANALOG_INPUT_SIZE + LPP_ANALOG_INPUT_SIZE] = [0; LPP_ANALOG_INPUT_SIZE + LPP_TEMPERATURE_SIZE + LPP_GPS_SIZE + LPP_ANALOG_INPUT_SIZE+ LPP_ANALOG_INPUT_SIZE];
+        let mut buffer: [u8; LPP_ANALOG_INPUT_SIZE + LPP_TEMPERATURE_SIZE + LPP_GPS_SIZE + LPP_DIGITAL_INPUT_SIZE] = [0; LPP_ANALOG_INPUT_SIZE + LPP_TEMPERATURE_SIZE + LPP_GPS_SIZE + LPP_DIGITAL_INPUT_SIZE];
         let mut lpp = CayenneLPP::new(&mut buffer);
 
         // Add the values
@@ -231,8 +231,7 @@ async fn main(spawner: Spawner) {
                     pos.longitude,
                     pos.altitude,
                 ).unwrap();
-                lpp.add_analog_input(1, pos.hdop).unwrap();
-                lpp.add_analog_input(2, pos.time_to_fix_ms as f32).unwrap();
+                lpp.add_digital_input(1, pos.num_of_fix_satellites as u8).unwrap();
             }
         }
 

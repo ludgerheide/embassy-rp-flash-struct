@@ -162,10 +162,10 @@ impl<'d, T: Instance, PO: Pin> Gps<'d, T, PO> {
             {
                 self.enable_pin.set_low();
                 let fix_time = Instant::now();
-                let time_to_fix = (fix_time - start_time).as_millis() as u32;
+                let time_to_fix = (fix_time - start_time).as_millis();
                 
                 return PositionData {
-                    time_to_fix_ms: time_to_fix,
+                    time_to_fix_ms: time_to_fix as u32,
                     hdop: nmea.hdop.unwrap(),
                     num_of_fix_satellites: nmea.num_of_fix_satellites.unwrap(),
                     
