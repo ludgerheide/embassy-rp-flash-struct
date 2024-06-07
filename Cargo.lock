@@ -578,9 +578,9 @@ dependencies = [
 
 [[package]]
 name = "embassy-time"
-version = "0.3.0"
+version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a9c844070d9f80dc66ee739299183312baee2e1cdeb6e90b4ea2af44f4676da5"
+checksum = "274c019608a9004aed3cafc871e2a3c87ce9351d537dcaab4cc5db184d4a04b1"
 dependencies = [
  "cfg-if",
  "critical-section",
@@ -1026,7 +1026,7 @@ checksum = "90ed8c1e510134f979dbc4f070f87d4313098b704861a105fe34231c70a3901c"
 [[package]]
 name = "lora-modulation"
 version = "0.1.4"
-source = "git+https://github.com/ludgerheide/lora-rs#8d33e039ce6de5ac7d1ed9e097d68e06a9294f35"
+source = "git+https://github.com/ludgerheide/lora-rs#f3669d9a15dcb2ebf3a14452e081c7ec4f30876b"
 dependencies = [
  "defmt",
 ]
@@ -1034,7 +1034,7 @@ dependencies = [
 [[package]]
 name = "lora-phy"
 version = "3.0.1-alpha.0"
-source = "git+https://github.com/ludgerheide/lora-rs#8d33e039ce6de5ac7d1ed9e097d68e06a9294f35"
+source = "git+https://github.com/ludgerheide/lora-rs#f3669d9a15dcb2ebf3a14452e081c7ec4f30876b"
 dependencies = [
  "defmt",
  "embedded-hal 1.0.0",
@@ -1047,7 +1047,7 @@ dependencies = [
 [[package]]
 name = "lorawan"
 version = "0.8.0"
-source = "git+https://github.com/ludgerheide/lora-rs#8d33e039ce6de5ac7d1ed9e097d68e06a9294f35"
+source = "git+https://github.com/ludgerheide/lora-rs#f3669d9a15dcb2ebf3a14452e081c7ec4f30876b"
 dependencies = [
  "aes",
  "cmac",
@@ -1059,7 +1059,7 @@ dependencies = [
 [[package]]
 name = "lorawan-device"
 version = "0.12.1"
-source = "git+https://github.com/ludgerheide/lora-rs#8d33e039ce6de5ac7d1ed9e097d68e06a9294f35"
+source = "git+https://github.com/ludgerheide/lora-rs#f3669d9a15dcb2ebf3a14452e081c7ec4f30876b"
 dependencies = [
  "defmt",
  "document-features",
@@ -1644,9 +1644,9 @@ checksum = "3354b9ac3fae1ff6755cb6db53683adb661634f67557942dea4facebec0fee4b"
 
 [[package]]
 name = "unicode-width"
-version = "0.1.12"
+version = "0.1.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "68f5e5f3158ecfd4b8ff6fe086db7c8467a2dfdac97fe420f2b7c4aa97af66d6"
+checksum = "0336d538f7abc86d282a4189614dfaa90810dfc2c6f6427eaf88e16311dd225d"
 
 [[package]]
 name = "unicode-xid"
