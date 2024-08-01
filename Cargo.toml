@@ -1,5 +1,5 @@
 [package]
-name = "ebassy-flash"
+name = "embassy-rp-flash-struct"
 version = "1.0.0"
 edition = "2021"
 categories = ["embedded", "no-std", "asynchronous"]
