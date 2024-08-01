@@ -20,7 +20,7 @@ const ADDR_OFFSET: usize = TOTAL_FLASH_SIZE - USED_FLASH_SIZE;
 // This is the amount of blocks we can for into the memory
 const BLOCK_COUNT: u32 = USED_FLASH_SIZE as u32 / ERASE_SIZE as u32;
 // How many times we write to a single block before moving to the next one
-const MAX_WRITES_PER_BLOCK: u32 = 20;
+const MAX_WRITES_PER_BLOCK: u32 = 100000;
 // If the device is already used, we may want to start at a later value, without changing the
 // USED_FLASH_SIZE
 const START_BLOCK_NO: u32 = 0;
