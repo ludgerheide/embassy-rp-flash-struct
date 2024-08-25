@@ -35,6 +35,9 @@ pub struct NonVolatileData {
 	payload: [u8; PAGE_SIZE - size_of::<u32>()],
 }
 
+/// This is what will actually get saved on the flash. It is a generic payload
+/// and a usage counter. If you just want the usage counter, you can make the ngeneric payload
+/// ()
 impl NonVolatileData {
 	pub fn encode<T: Encode + Decode>(payload: T, block_write_count: u32) -> NonVolatileData {
 		let mut payload_buf: [u8; PAGE_SIZE - size_of::<u32>()] =
@@ -55,14 +58,14 @@ impl NonVolatileData {
 	}
 }
 
-pub struct FlashCounter<'d, T: Default + Encode + Decode> {
+pub struct FlashStorage<'d, T: Default + Encode + Decode> {
 	active_block_idx: u32,
 	block_write_count: u32,
 	flash: Flash<'d, FLASH, embassy_rp::flash::Async, TOTAL_FLASH_SIZE>,
 	_phantom: PhantomData<T>, // Needed so the generic works
 }
 
-impl<'d, T: Default + Encode + Decode> FlashCounter<'d, T> {
+impl<'d, T: Default + Encode + Decode> FlashStorage<'d, T> {
 	/// Initializes the Flash object we will be operating on
 	fn init_flash(
 		peripheral_flash: FLASH,
